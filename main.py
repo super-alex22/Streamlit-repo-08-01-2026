@@ -1,108 +1,112 @@
 import streamlit as st
 import numpy as np
 from PIL import Image
-import joblib
-import requests
-import io
+import cv2
+from tensorflow.keras.models import load_model
 
-st.set_page_config(page_title="Handwritten Digit Recognition", page_icon="✍️")
+# --------------------------------------------------
+# Page Config
+# --------------------------------------------------
+st.set_page_config(
+    page_title="Handwritten Digit Recognition",
+    page_icon="✍️",
+    layout="centered"
+)
+
 st.title("✍️ Handwritten Digit Recognition")
-st.write("Upload a handwritten digit image and AI will try to recognize it.")
+st.write("Upload a handwritten digit image (0–9) and the AI will recognize it.")
 
-# Simple model loading with fallback
+# --------------------------------------------------
+# Load CNN Model
+# --------------------------------------------------
 @st.cache_resource
-def load_model():
+def load_cnn_model():
     try:
-        # Try to load pre-trained model
-        # Using sklearn's built-in digits dataset
-        from sklearn.datasets import load_digits
-        from sklearn.neural_network import MLPClassifier
-        from sklearn.model_selection import train_test_split
-
-        digits = load_digits()
-        X = digits.images.reshape((len(digits.images), -1)) / 16.0
-        y = digits.target
-
-        X_train, _, y_train, _ = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-
-        model = MLPClassifier(
-            hidden_layer_sizes=(100,),
-            max_iter=100,
-            random_state=42
-        )
-
-        model.fit(X_train, y_train)
+        model = load_model("digit_cnn.h5")
         return model
-
     except Exception as e:
-        st.error(f"Model loading error: {e}")
-        return None
+        st.error("❌ Could not load model. Make sure digit_cnn.h5 exists.")
+        st.stop()
 
+model = load_cnn_model()
+st.success("✅ CNN model loaded successfully!")
 
-model = load_model()
-
-if model is None:
-    st.warning("Could not load model. Using fallback recognition.")
-else:
-    st.success("Model loaded successfully!")
-
-# File uploader
+# --------------------------------------------------
+# File Upload
+# --------------------------------------------------
 uploaded_file = st.file_uploader(
-    "Choose an image file", type=["png", "jpg", "jpeg"]
+    "Upload an image",
+    type=["png", "jpg", "jpeg"]
 )
 
 if uploaded_file is not None:
-    # Display the uploaded image
+    # Load image
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    # Process the image
     try:
-        # Convert to grayscale and resize to 8x8
-        img_gray = image.convert("L")
-        img_resized = img_gray.resize((8, 8))
+        # ------------------------------------------
+        # Image Preprocessing (MNIST-style)
+        # ------------------------------------------
+        img_gray = np.array(image.convert("L"))
 
-        # Convert to numpy array and invert if needed
-        img_array = np.array(img_resized)
+        # Resize to 28x28
+        img_resized = cv2.resize(img_gray, (28, 28))
 
-        # If background is dark, invert
-        if np.mean(img_array) > 128:
-            img_array = 255 - img_array
+        # Blur to remove noise
+        img_blur = cv2.GaussianBlur(img_resized, (5, 5), 0)
 
-        # Normalize like the training data
-        img_array = img_array / 16.0
-        img_flat = img_array.flatten().reshape(1, -1)
+        # Threshold (white bg, black digit)
+        _, img_thresh = cv2.threshold(
+            img_blur,
+            0,
+            255,
+            cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
 
-        if model is not None:
-            # Make prediction
-            prediction = model.predict(img_flat)[0]
-            st.write(f"## Prediction: **{prediction}**")
+        # Normalize
+        img_norm = img_thresh / 255.0
 
-            # Show probabilities
-            probs = model.predict_proba(img_flat)[0]
-            st.write("### Probabilities:")
-            for i, prob in enumerate(probs):
-                st.write(f"Digit {i}: {prob:.2%}")
+        # Reshape for CNN
+        img_input = img_norm.reshape(1, 28, 28, 1)
 
-        else:
-            # Fallback: simple threshold-based recognition
-            st.write("## Using fallback recognition")
-            # Simple heuristic based on pixel intensity
+        # ------------------------------------------
+        # Prediction
+        # ------------------------------------------
+        prediction = model.predict(img_input)
+        digit = np.argmax(prediction)
+
+        st.markdown(f"## 🧠 Prediction: **{digit}**")
+
+        # Probabilities
+        st.subheader("Confidence")
+        for i, prob in enumerate(prediction[0]):
+            st.write(f"Digit {i}: {prob:.2%}")
+
+        # Show processed image
+        st.subheader("Processed Image (What the model sees)")
+        st.image(img_thresh, clamp=True)
 
     except Exception as e:
-        st.error(f"Error processing image: {e}")
+        st.error(f"⚠️ Error processing image: {e}")
 
-# Instructions
-st.sidebar.header("Instructions")
+# --------------------------------------------------
+# Sidebar Instructions
+# --------------------------------------------------
+st.sidebar.header("📌 Instructions")
 st.sidebar.write("""
-1. Upload an image of a handwritten digit (0-9)
-2. The image will be resized to 8x8 pixels
-3. AI model will predict the digit
-4. For best results:
-  - WHite background
-  - Black digit
-  - Centered digit
-  - Minimal noise
+**For best results:**
+- White background
+- Black digit
+- One digit only (0–9)
+- Digit centered
+- Minimal noise
+
+**Model:**
+- CNN trained on MNIST
+- 28×28 resolution
+- ~99% accuracy
 """)
+
+st.sidebar.markdown("---")
+st.sidebar.write("Made with ❤️ using Streamlit & TensorFlow")
