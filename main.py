@@ -1,112 +1,96 @@
 import streamlit as st
 import numpy as np
 from PIL import Image
-import cv2
-from tensorflow.keras.models import load_model
 
-# --------------------------------------------------
-# Page Config
-# --------------------------------------------------
-st.set_page_config(
-    page_title="Handwritten Digit Recognition",
-    page_icon="✍️",
-    layout="centered"
-)
-
+st.set_page_config(page_title="Handwritten Digit Recognition", page_icon="✍️")
 st.title("✍️ Handwritten Digit Recognition")
 st.write("Upload a handwritten digit image (0–9) and the AI will recognize it.")
 
 # --------------------------------------------------
-# Load CNN Model
+# Train model automatically (cached)
 # --------------------------------------------------
 @st.cache_resource
-def load_cnn_model():
-    try:
-        model = load_model("digit_cnn.h5")
-        return model
-    except Exception as e:
-        st.error("❌ Could not load model. Make sure digit_cnn.h5 exists.")
-        st.stop()
+def load_model():
+    from sklearn.datasets import load_digits
+    from sklearn.neural_network import MLPClassifier
+    from sklearn.model_selection import train_test_split
 
-model = load_cnn_model()
-st.success("✅ CNN model loaded successfully!")
+    digits = load_digits()
+
+    X = digits.images.reshape(len(digits.images), -1)
+    X = X / X.max()
+    y = digits.target
+
+    X_train, _, y_train, _ = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    model = MLPClassifier(
+        hidden_layer_sizes=(128, 64),
+        max_iter=500,
+        random_state=42
+    )
+
+    model.fit(X_train, y_train)
+    return model
+
+
+model = load_model()
+st.success("✅ Model trained and loaded!")
 
 # --------------------------------------------------
-# File Upload
+# Upload image
 # --------------------------------------------------
 uploaded_file = st.file_uploader(
-    "Upload an image",
+    "Choose an image file",
     type=["png", "jpg", "jpeg"]
 )
 
-if uploaded_file is not None:
-    # Load image
+if uploaded_file:
     image = Image.open(uploaded_file)
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
     try:
         # ------------------------------------------
-        # Image Preprocessing (MNIST-style)
+        # Image preprocessing (8×8)
         # ------------------------------------------
-        img_gray = np.array(image.convert("L"))
+        img_gray = image.convert("L")
+        img_resized = img_gray.resize((8, 8))
 
-        # Resize to 28x28
-        img_resized = cv2.resize(img_gray, (28, 28))
+        img_array = np.array(img_resized).astype(np.float32)
 
-        # Blur to remove noise
-        img_blur = cv2.GaussianBlur(img_resized, (5, 5), 0)
-
-        # Threshold (white bg, black digit)
-        _, img_thresh = cv2.threshold(
-            img_blur,
-            0,
-            255,
-            cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-        )
+        # Auto invert if background is white
+        if img_array.mean() > 127:
+            img_array = 255 - img_array
 
         # Normalize
-        img_norm = img_thresh / 255.0
+        img_array = img_array / img_array.max()
 
-        # Reshape for CNN
-        img_input = img_norm.reshape(1, 28, 28, 1)
+        img_flat = img_array.flatten().reshape(1, -1)
 
         # ------------------------------------------
         # Prediction
         # ------------------------------------------
-        prediction = model.predict(img_input)
-        digit = np.argmax(prediction)
+        prediction = model.predict(img_flat)[0]
+        probs = model.predict_proba(img_flat)[0]
 
-        st.markdown(f"## 🧠 Prediction: **{digit}**")
+        st.markdown(f"## 🧠 Prediction: **{prediction}**")
 
-        # Probabilities
         st.subheader("Confidence")
-        for i, prob in enumerate(prediction[0]):
+        for i, prob in enumerate(probs):
             st.write(f"Digit {i}: {prob:.2%}")
 
-        # Show processed image
-        st.subheader("Processed Image (What the model sees)")
-        st.image(img_thresh, clamp=True)
-
     except Exception as e:
-        st.error(f"⚠️ Error processing image: {e}")
+        st.error(f"Error processing image: {e}")
 
 # --------------------------------------------------
-# Sidebar Instructions
+# Sidebar
 # --------------------------------------------------
-st.sidebar.header("📌 Instructions")
+st.sidebar.header("Instructions")
 st.sidebar.write("""
-**For best results:**
+- Upload one digit (0–9)
 - White background
 - Black digit
-- One digit only (0–9)
-- Digit centered
+- Centered digit
 - Minimal noise
-
-**Model:**
-- CNN trained on MNIST
-- 28×28 resolution
-- ~99% accuracy
 """)
-
-st.sidebar.markdown("---")
-st.sidebar.write("Made with ❤️ using Streamlit & TensorFlow")
